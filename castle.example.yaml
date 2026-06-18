@@ -1,0 +1,30 @@
+server:
+  host: "0.0.0.0"
+  port: 8080
+
+cameras:
+  - id: "front-door"
+    name: "Front Door"
+    url: "rtsp://192.168.1.100:554/stream"
+    enable: true
+
+  - id: "backyard"
+    name: "Backyard"
+    url: "rtsp://192.168.1.101:554/stream"
+    enable: false
+
+record:
+  path: "/recordings"
+  segment_duration: 10     # seconds per HLS segment / clip length
+  retention_days: 7
+  continuous_mode: false   # true = always record; false = motion-triggered only
+
+detect:
+  motion_threshold: 0.02           # fraction of changed pixels (lower = more sensitive)
+  min_object_score: 0.5
+  model_path: "/config/yolov8n.onnx"
+  enable_object_detect: false      # requires model_path; enable in M2
+
+notify:
+  webhook_url: ""          # POST JSON payload to this URL on events
+  ntfy_topic: ""           # e.g. https://ntfy.sh/my-castle-alerts

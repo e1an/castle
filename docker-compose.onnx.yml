@@ -1,0 +1,9 @@
+# Overlay to run the ONNX-enabled image.
+# Usage: make docker-up-onnx
+# Place yolov8n.onnx in ./config/ and set detect.enable_object_detect: true in castle.yaml.
+services:
+  castle:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.onnx
+    image: castle:onnx

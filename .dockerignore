@@ -1,0 +1,12 @@
+web/node_modules
+web/dist
+internal/api/ui
+recordings
+*.db
+*.db-shm
+*.db-wal
+castle
+castle.yaml
+.git
+.gitignore
+docs

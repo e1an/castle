@@ -1,0 +1,24 @@
+services:
+  castle:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    image: castle:latest
+    container_name: castle
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./config:/config
+      - ./recordings:/recordings
+    environment:
+      - TZ=America/Chicago   # set your timezone
+      # Uncomment to enable basic auth:
+      # - CASTLE_USER=admin
+      # - CASTLE_PASS=changeme
+    healthcheck:
+      test: ["CMD", "castle", "-config", "/config/castle.yaml", "-healthcheck"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
