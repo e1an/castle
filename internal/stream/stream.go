@@ -25,7 +25,7 @@ func NewManager() *Manager {
 	return &Manager{streams: make(map[string]*Stream)}
 }
 
-func (m *Manager) Start(ctx context.Context, cam config.Camera, recDir string, segDur int, onMotion func(camID string, frame image.Image)) error {
+func (m *Manager) Start(ctx context.Context, cam config.Camera, recDir string, segDur int, continuous bool, onMotion func(camID string, frame image.Image)) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -33,7 +33,7 @@ func (m *Manager) Start(ctx context.Context, cam config.Camera, recDir string, s
 		return fmt.Errorf("stream %s already running", cam.ID)
 	}
 
-	s := newStream(cam, recDir, segDur, onMotion)
+	s := newStream(cam, recDir, segDur, continuous, onMotion)
 	m.streams[cam.ID] = s
 	go s.run(ctx)
 	return nil
@@ -59,20 +59,22 @@ func (m *Manager) StopAll() {
 
 // Stream manages a single camera feed via FFmpeg.
 type Stream struct {
-	cam      config.Camera
-	recDir   string
-	segDur   int
-	onMotion func(camID string, frame image.Image)
-	cancel   context.CancelFunc
+	cam        config.Camera
+	recDir     string
+	segDur     int
+	continuous bool // whether to run a separate continuous-recording process
+	onMotion   func(camID string, frame image.Image)
+	cancel     context.CancelFunc
 }
 
-func newStream(cam config.Camera, recDir string, segDur int, onMotion func(string, image.Image)) *Stream {
-	return &Stream{cam: cam, recDir: recDir, segDur: segDur, onMotion: onMotion}
+func newStream(cam config.Camera, recDir string, segDur int, continuous bool, onMotion func(string, image.Image)) *Stream {
+	return &Stream{cam: cam, recDir: recDir, segDur: segDur, continuous: continuous, onMotion: onMotion}
 }
 
-// run starts two FFmpeg subprocesses:
-//  1. HLS segmenter for recording
-//  2. MJPEG pipe for frame analysis (motion detection)
+// run starts FFmpeg subprocesses for this camera:
+//  1. HLS segmenter — rolling live buffer for the UI and motion-triggered clips
+//  2. Frame pipe — raw frames for motion/object detection
+//  3. Continuous recorder — 5-minute MP4 chunks (only when continuous_mode: true)
 func (s *Stream) run(parent context.Context) {
 	ctx, cancel := context.WithCancel(parent)
 	s.cancel = cancel
@@ -82,10 +84,15 @@ func (s *Stream) run(parent context.Context) {
 	wg.Add(2)
 	go func() { defer wg.Done(); s.runHLS(ctx) }()
 	go func() { defer wg.Done(); s.runFramePipe(ctx) }()
+	if s.continuous {
+		wg.Add(1)
+		go func() { defer wg.Done(); s.runContinuous(ctx) }()
+	}
 	wg.Wait()
 }
 
-// runHLS records the stream to HLS segments, restarting on failure.
+// runHLS records the stream to a rolling HLS buffer used by the live view
+// and as the source for motion-triggered clip assembly.
 func (s *Stream) runHLS(ctx context.Context) {
 	outDir := filepath.Join(s.recDir, s.cam.ID)
 	playlist := filepath.Join(outDir, "live.m3u8")
@@ -102,7 +109,7 @@ func (s *Stream) runHLS(ctx context.Context) {
 		"-c:v", "copy",
 		"-an",
 		"-f", "hls",
-		"-hls_time", "2",      // short segments for low-latency live view
+		"-hls_time", "2",
 		"-hls_list_size", "6",
 		"-hls_flags", "delete_segments+append_list",
 		"-hls_segment_filename", filepath.Join(outDir, "seg%05d.ts"),
@@ -125,7 +132,47 @@ func (s *Stream) runHLS(ctx context.Context) {
 	}
 }
 
-// runFramePipe pipes raw RGB frames from FFmpeg for motion analysis, restarting on failure.
+// runContinuous writes back-to-back 5-minute MP4 chunks into recDir/<id>/continuous/.
+// These are kept separately from motion clips and are purged on retention schedule.
+// NOTE: this opens a second RTSP connection to the camera.
+func (s *Stream) runContinuous(ctx context.Context) {
+	dir := filepath.Join(s.recDir, s.cam.ID, "continuous")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		log.Printf("[%s] continuous mkdir: %v", s.cam.ID, err)
+		return
+	}
+
+	args := []string{
+		"-loglevel", "warning",
+		"-rtsp_transport", "tcp",
+		"-i", s.cam.URL,
+		"-c:v", "copy",
+		"-an",
+		"-f", "segment",
+		"-segment_time", "300", // 5-minute chunks
+		"-segment_format", "mp4",
+		"-strftime", "1",
+		"-reset_timestamps", "1",
+		filepath.Join(dir, "%Y%m%dT%H%M%SZ.mp4"),
+	}
+
+	for {
+		if ctx.Err() != nil {
+			return
+		}
+		cmd := exec.CommandContext(ctx, "ffmpeg", args...)
+		if err := cmd.Run(); err != nil && ctx.Err() == nil {
+			log.Printf("[%s] continuous ffmpeg exited: %v — restarting in 5s", s.cam.ID, err)
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+		}
+	}
+}
+
+// runFramePipe pipes raw RGB frames from FFmpeg for motion/object analysis.
 func (s *Stream) runFramePipe(ctx context.Context) {
 	const (
 		width  = 640

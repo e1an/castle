@@ -186,11 +186,18 @@ func copySegment(src, dir, prefix string) (string, error) {
 	return dst, nil
 }
 
-// Purge removes clips older than retentionDays for camID.
-func (r *Recorder) Purge(camID string, retentionDays int) error {
-	dir := filepath.Join(r.recDir, camID, "clips")
-	cutoff := time.Now().AddDate(0, 0, -retentionDays)
+// PurgeContinuous removes continuous-recording MP4 chunks older than retentionDays.
+func (r *Recorder) PurgeContinuous(camID string, retentionDays int) error {
+	return purgeDir(filepath.Join(r.recDir, camID, "continuous"), retentionDays)
+}
 
+// Purge removes motion-triggered clips older than retentionDays for camID.
+func (r *Recorder) Purge(camID string, retentionDays int) error {
+	return purgeDir(filepath.Join(r.recDir, camID, "clips"), retentionDays)
+}
+
+func purgeDir(dir string, retentionDays int) error {
+	cutoff := time.Now().AddDate(0, 0, -retentionDays)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
@@ -198,7 +205,6 @@ func (r *Recorder) Purge(camID string, retentionDays int) error {
 		}
 		return err
 	}
-
 	for _, e := range entries {
 		info, err := e.Info()
 		if err != nil {

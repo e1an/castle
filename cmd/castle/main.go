@@ -56,7 +56,11 @@ func main() {
 	defer stop()
 
 	// Object detector is initialised once — loading the ONNX model is expensive.
-	var objDetector detect.ObjectDetector
+	// ONNX Runtime sessions are not goroutine-safe; all inference goes through detMu.
+	var (
+		objDetector detect.ObjectDetector
+		detMu       sync.Mutex
+	)
 	if cfg.Detect.EnableObjectDetect && cfg.Detect.ModelPath != "" {
 		od, odErr := detect.NewObjectDetector(cfg.Detect.ModelPath, cfg.Detect.MinObjectScore)
 		if odErr != nil {
@@ -65,8 +69,23 @@ func main() {
 		if od != nil {
 			objDetector = od
 			defer objDetector.Close()
-			log.Printf("object detection enabled (model: %s, threshold: %.2f)", cfg.Detect.ModelPath, cfg.Detect.MinObjectScore)
+			log.Printf("object detection enabled (model: %s, min score: %.2f)",
+				cfg.Detect.ModelPath, cfg.Detect.MinObjectScore)
 		}
+	}
+
+	// runDetect serialises ONNX inference and returns the best detection or "","0".
+	runDetect := func(frame image.Image) (label string, score float64) {
+		if objDetector == nil {
+			return "", 0
+		}
+		detMu.Lock()
+		defer detMu.Unlock()
+		dets, err := objDetector.Detect(frame)
+		if err != nil || len(dets) == 0 {
+			return "", 0
+		}
+		return dets[0].Label, dets[0].Score
 	}
 
 	var cfgMu sync.RWMutex
@@ -76,76 +95,139 @@ func main() {
 		recorder := record.New(c.Record.Path, c.Record.SegmentDuration)
 		detectors := make(map[string]*detect.MotionDetector)
 
+		// perCam tracks per-camera clip state to prevent motion storms.
+		type perCam struct {
+			mu       sync.Mutex
+			active   bool   // a clip goroutine is currently running
+			detLabel string // best object label seen across all frames this clip
+			detScore float64
+		}
+		camState := make(map[string]*perCam)
+
 		for _, cam := range c.Cameras {
 			if !cam.Enable {
 				continue
 			}
 			detectors[cam.ID] = detect.NewMotionDetector(c.Detect.MotionThreshold)
+			camState[cam.ID] = &perCam{}
 			cam := cam
 
 			onMotion := func(camID string, frame image.Image) {
 				cfgMu.RLock()
-				motionThreshold := c.Detect.MotionThreshold
+				_ = c.Detect.MotionThreshold // read under lock if needed in future
 				cfgMu.RUnlock()
-				_ = motionThreshold
 
-				d := detectors[camID]
-				if !d.Detect(frame) {
-					return
-				}
-				log.Printf("[%s] motion detected — recording clip", camID)
-
-				clipPath, err := recorder.Clip(ctx, camID)
-				if err != nil {
-					log.Printf("[%s] clip error: %v", camID, err)
+				if !detectors[camID].Detect(frame) {
 					return
 				}
 
-				evt := &events.Event{
-					CameraID:   camID,
-					Type:       events.EventMotion,
-					ClipPath:   clipPath,
-					OccurredAt: time.Now().UTC(),
-				}
+				pc := camState[camID]
+				pc.mu.Lock()
 
-				if objDetector != nil {
-					detections, err := objDetector.Detect(frame)
-					if err != nil {
-						log.Printf("[%s] object detection error: %v", camID, err)
-					} else if len(detections) > 0 {
-						best := detections[0]
-						evt.Type = events.EventObject
-						evt.Label = best.Label
-						evt.Score = best.Score
-						log.Printf("[%s] object detected: %s (%.0f%%)", camID, best.Label, best.Score*100)
+				if pc.active {
+					// Clip already in progress — still run detection on this frame
+					// so we pick the best label across the whole event, not just
+					// the (often blurry) trigger frame.
+					pc.mu.Unlock()
+					label, score := runDetect(frame)
+					if label != "" {
+						pc.mu.Lock()
+						if score > pc.detScore {
+							pc.detLabel = label
+							pc.detScore = score
+						}
+						pc.mu.Unlock()
 					}
+					return
 				}
 
-				if _, err := store.Insert(evt); err != nil {
-					log.Printf("[%s] db insert: %v", camID, err)
-				}
+				// No clip in progress — start one.
+				pc.active = true
+				pc.detLabel = ""
+				pc.detScore = 0
+				pc.mu.Unlock()
 
-				notifier.Send(notify.Payload{
-					CameraID:  camID,
-					EventType: string(evt.Type),
-					Label:     evt.Label,
-					Score:     evt.Score,
-					ClipPath:  clipPath,
-					Timestamp: evt.OccurredAt,
-				})
+				go func() {
+					defer func() {
+						pc.mu.Lock()
+						pc.active = false
+						pc.mu.Unlock()
+					}()
+
+					log.Printf("[%s] motion detected — recording clip", camID)
+
+					// Run detection on the trigger frame concurrently while the
+					// clip records, so we don't delay the clip start.
+					detDone := make(chan struct{})
+					go func() {
+						defer close(detDone)
+						label, score := runDetect(frame)
+						if label != "" {
+							pc.mu.Lock()
+							if score > pc.detScore {
+								pc.detLabel = label
+								pc.detScore = score
+							}
+							pc.mu.Unlock()
+						}
+					}()
+
+					clipPath, clipErr := recorder.Clip(ctx, camID)
+					<-detDone // ensure trigger-frame detection has finished
+
+					if clipErr != nil {
+						log.Printf("[%s] clip error: %v", camID, clipErr)
+						return
+					}
+
+					pc.mu.Lock()
+					label := pc.detLabel
+					score := pc.detScore
+					pc.mu.Unlock()
+
+					evt := &events.Event{
+						CameraID:   camID,
+						Type:       events.EventMotion,
+						ClipPath:   clipPath,
+						OccurredAt: time.Now().UTC(),
+					}
+					if label != "" {
+						evt.Type = events.EventObject
+						evt.Label = label
+						evt.Score = score
+						log.Printf("[%s] best detection: %s (%.0f%%)", camID, label, score*100)
+					}
+
+					if _, err := store.Insert(evt); err != nil {
+						log.Printf("[%s] db insert: %v", camID, err)
+					}
+					notifier.Send(notify.Payload{
+						CameraID:  camID,
+						EventType: string(evt.Type),
+						Label:     evt.Label,
+						Score:     evt.Score,
+						ClipPath:  clipPath,
+						Timestamp: evt.OccurredAt,
+					})
+				}()
 			}
 
-			if err := mgr.Start(ctx, cam, c.Record.Path, c.Record.SegmentDuration, onMotion); err != nil {
+			if err := mgr.Start(ctx, cam, c.Record.Path, c.Record.SegmentDuration,
+				c.Record.ContinuousMode, onMotion); err != nil {
 				log.Printf("stream %s: %v", cam.ID, err)
 				continue
 			}
-			log.Printf("stream started: %s (%s)", cam.Name, cam.ID)
+			mode := "motion-triggered"
+			if c.Record.ContinuousMode {
+				mode = "continuous"
+			}
+			log.Printf("stream started: %s (%s) [%s]", cam.Name, cam.ID, mode)
 		}
 	}
 
 	startCameras(ctx, cfg)
 
-	// Reload stops all streams and restarts them with the new config.
+	// Reload stops all streams and restarts with the new config.
 	reloadFn := func(newCfg *config.Config) error {
 		cfgMu.Lock()
 		defer cfgMu.Unlock()
@@ -156,7 +238,7 @@ func main() {
 		return nil
 	}
 
-	// Daily retention purge.
+	// Daily retention purge — covers both motion clips and continuous chunks.
 	go func() {
 		ticker := time.NewTicker(24 * time.Hour)
 		defer ticker.Stop()
@@ -169,10 +251,15 @@ func main() {
 				cameras := cfg.Cameras
 				recPath := cfg.Record.Path
 				retDays := cfg.Record.RetentionDays
+				continuous := cfg.Record.ContinuousMode
 				cfgMu.RUnlock()
+
 				r := record.New(recPath, 10)
 				for _, cam := range cameras {
 					_ = r.Purge(cam.ID, retDays)
+					if continuous {
+						_ = r.PurgeContinuous(cam.ID, retDays)
+					}
 				}
 			}
 		}
