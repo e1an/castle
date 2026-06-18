@@ -13,8 +13,40 @@ function slugify(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
+// Embed credentials into an RTSP URL: rtsp://user:pass@host/path
+function buildUrl(base: string, user: string, pass: string): string {
+  if (!user.trim()) return base;
+  try {
+    const u = new URL(base);
+    u.username = encodeURIComponent(user);
+    u.password = encodeURIComponent(pass);
+    return u.toString();
+  } catch {
+    // If URL parsing fails, inject manually before the host
+    const proto = base.match(/^[a-z]+:\/\//i)?.[0] ?? "rtsp://";
+    const rest = base.slice(proto.length);
+    const creds = pass ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : `${encodeURIComponent(user)}@`;
+    return `${proto}${creds}${rest}`;
+  }
+}
+
+// Show URL with credentials masked for display
+function maskUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    if (u.username) u.password = u.password ? "••••" : "";
+    if (u.username) u.username = "••••";
+    return u.toString();
+  } catch {
+    return url;
+  }
+}
+
 export function AddCameraWizard({ onDone, onCancel }: Props) {
   const [step, setStep] = useState<Step>("details");
+  const [baseUrl, setBaseUrl] = useState("");
+  const [rtspUser, setRtspUser] = useState("");
+  const [rtspPass, setRtspPass] = useState("");
   const [cam, setCam] = useState<Camera>({ id: "", name: "", url: "", enable: true });
   const [idEdited, setIdEdited] = useState(false);
   const [testing, setTesting] = useState(false);
@@ -28,6 +60,12 @@ export function AddCameraWizard({ onDone, onCancel }: Props) {
       name,
       id: idEdited ? prev.id : slugify(name),
     }));
+  }
+
+  function advanceToTest() {
+    const fullUrl = buildUrl(baseUrl, rtspUser, rtspPass);
+    setCam((prev) => ({ ...prev, url: fullUrl }));
+    setStep("test");
   }
 
   async function handleTest() {
@@ -71,7 +109,7 @@ export function AddCameraWizard({ onDone, onCancel }: Props) {
     }
   }
 
-  const detailsValid = cam.name.trim() !== "" && cam.id.trim() !== "" && cam.url.trim() !== "";
+  const detailsValid = cam.name.trim() !== "" && cam.id.trim() !== "" && baseUrl.trim() !== "";
 
   return (
     <div className="wizard-overlay" onClick={(e) => e.target === e.currentTarget && onCancel()}>
@@ -110,11 +148,28 @@ export function AddCameraWizard({ onDone, onCancel }: Props) {
                 />
               </label>
               <label className="config-grid--full">
-                RTSP / stream URL
+                RTSP / stream URL <span className="field-note">(without credentials)</span>
                 <input
                   placeholder="rtsp://192.168.1.100:554/stream"
-                  value={cam.url}
-                  onChange={(e) => setCam((p) => ({ ...p, url: e.target.value }))}
+                  value={baseUrl}
+                  onChange={(e) => setBaseUrl(e.target.value)}
+                />
+              </label>
+              <label>
+                Username <span className="field-note">(if required)</span>
+                <input
+                  placeholder="admin"
+                  value={rtspUser}
+                  onChange={(e) => setRtspUser(e.target.value)}
+                />
+              </label>
+              <label>
+                Password
+                <input
+                  type="password"
+                  placeholder="••••••••"
+                  value={rtspPass}
+                  onChange={(e) => setRtspPass(e.target.value)}
                 />
               </label>
               <label className="config-grid__checkbox config-grid--full">
@@ -127,7 +182,7 @@ export function AddCameraWizard({ onDone, onCancel }: Props) {
 
           {step === "test" && (
             <div className="wizard__test">
-              <p className="wizard__test-url">{cam.url}</p>
+              <p className="wizard__test-url">{maskUrl(cam.url)}</p>
               <button className="btn btn--secondary" onClick={handleTest} disabled={testing}>
                 {testing ? "Testing…" : "Test connection"}
               </button>
@@ -145,7 +200,7 @@ export function AddCameraWizard({ onDone, onCancel }: Props) {
               <div className="wizard__summary">
                 <div><span>Name</span><strong>{cam.name}</strong></div>
                 <div><span>ID</span><strong>{cam.id}</strong></div>
-                <div><span>URL</span><strong>{cam.url}</strong></div>
+                <div><span>URL</span><strong>{maskUrl(cam.url)}</strong></div>
                 <div><span>Enabled</span><strong>{cam.enable ? "Yes" : "No"}</strong></div>
               </div>
               {error && <p className="wizard__error">{error}</p>}
@@ -165,7 +220,7 @@ export function AddCameraWizard({ onDone, onCancel }: Props) {
           <span style={{ flex: 1 }} />
           <button className="btn btn--ghost" onClick={onCancel}>Cancel</button>
           {step === "details" && (
-            <button className="btn btn--primary" disabled={!detailsValid} onClick={() => setStep("test")}>
+            <button className="btn btn--primary" disabled={!detailsValid} onClick={advanceToTest}>
               Next
             </button>
           )}
