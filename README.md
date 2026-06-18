@@ -8,7 +8,7 @@ Lightweight, self-hosted network video recorder (NVR). RTSP stream ingestion, mo
 mkdir -p config recordings
 cp castle.example.yaml config/castle.yaml
 # edit config/castle.yaml with your RTSP URLs
-docker compose up -d
+docker compose up --build -d
 ```
 
 Open **http://localhost:8080**.

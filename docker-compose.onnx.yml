@@ -6,4 +6,3 @@ services:
     build:
       context: .
       dockerfile: docker/Dockerfile.onnx
-    image: castle:onnx

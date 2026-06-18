@@ -17,7 +17,7 @@ Edit `config/castle.yaml` to add your camera RTSP URLs.
 ## 2. Start Castle
 
 ```bash
-docker compose up -d
+docker compose up --build -d
 ```
 
 The web UI is available at **http://localhost:8080**.
