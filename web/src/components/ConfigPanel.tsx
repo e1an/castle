@@ -4,9 +4,10 @@ import type { Config } from "../types";
 
 interface Props {
   onAddCamera: () => void;
+  onSaved?: () => void;
 }
 
-export function ConfigPanel({ onAddCamera }: Props) {
+export function ConfigPanel({ onAddCamera, onSaved }: Props) {
   const [cfg, setCfg] = useState<Config | null>(null);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
@@ -30,6 +31,7 @@ export function ConfigPanel({ onAddCamera }: Props) {
     try {
       await saveConfig(cfg);
       setStatus({ ok: true, msg: "Saved and reloaded." });
+      onSaved?.();
     } catch (e) {
       setStatus({ ok: false, msg: String(e) });
     } finally {

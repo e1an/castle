@@ -1,5 +1,5 @@
 import { useEffect, useState, useCallback } from "react";
-import { fetchEvents } from "./api";
+import { fetchEvents, fetchConfig } from "./api";
 import { EventRow } from "./components/EventRow";
 import { ClipPlayer } from "./components/ClipPlayer";
 import { LiveView } from "./components/LiveView";
@@ -15,9 +15,20 @@ export default function App() {
   const [view, setView] = useState<View>("live");
   const [showWizard, setShowWizard] = useState(false);
   const [events, setEvents] = useState<Event[]>([]);
+  const [configCameras, setConfigCameras] = useState<string[]>([]);
   const [selected, setSelected] = useState<Event | null>(null);
   const [cameraID, setCameraID] = useState("");
   const [error, setError] = useState<string | null>(null);
+
+  // Load enabled camera IDs from config — this is the source of truth for live view.
+  const loadCameras = useCallback(async () => {
+    try {
+      const cfg = await fetchConfig();
+      setConfigCameras(cfg.cameras.filter((c) => c.enable).map((c) => c.id));
+    } catch {
+      // Non-fatal — fall back to cameras derived from events.
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -30,17 +41,24 @@ export default function App() {
   }, [cameraID]);
 
   useEffect(() => {
+    loadCameras();
     load();
     const id = setInterval(load, POLL_MS);
     return () => clearInterval(id);
-  }, [load]);
+  }, [load, loadCameras]);
 
-  const cameras = Array.from(new Set(events.map((e) => e.CameraID))).sort();
-  const activeCam = cameraID || cameras[0] || "cam1";
+  // Cameras for the dropdown: prefer config list, fall back to cameras seen in events.
+  const eventCameras = Array.from(new Set(events.map((e) => e.CameraID))).sort();
+  const cameras = configCameras.length > 0 ? configCameras : eventCameras;
+  const activeCam = cameraID || cameras[0] || "";
 
   function openWizard() { setShowWizard(true); }
   function closeWizard() { setShowWizard(false); }
-  function wizardDone() { setShowWizard(false); setView("config"); }
+  function wizardDone() {
+    setShowWizard(false);
+    loadCameras(); // Refresh camera list immediately after adding one.
+    setView("live");
+  }
 
   return (
     <div className="layout">
@@ -82,8 +100,10 @@ export default function App() {
           <section className="player-pane">
             {selected ? (
               <ClipPlayer event={selected} />
-            ) : (
+            ) : activeCam ? (
               <LiveView cameraID={activeCam} />
+            ) : (
+              <p className="player-pane__empty">No cameras configured. Use + Camera to add one.</p>
             )}
           </section>
 
@@ -107,7 +127,7 @@ export default function App() {
         </main>
       ) : (
         <main className="main main--full">
-          <ConfigPanel onAddCamera={openWizard} />
+          <ConfigPanel onAddCamera={openWizard} onSaved={loadCameras} />
         </main>
       )}
 
