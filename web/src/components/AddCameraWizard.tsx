@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { fetchConfig, saveConfig, testStream } from "../api";
+import { maskUrl } from "../utils/url";
 import type { Camera } from "../types";
 
 interface Props {
@@ -30,17 +31,6 @@ function buildUrl(base: string, user: string, pass: string): string {
   }
 }
 
-// Show URL with credentials masked for display
-function maskUrl(url: string): string {
-  try {
-    const u = new URL(url);
-    if (u.username) u.password = u.password ? "••••" : "";
-    if (u.username) u.username = "••••";
-    return u.toString();
-  } catch {
-    return url;
-  }
-}
 
 export function AddCameraWizard({ onDone, onCancel }: Props) {
   const [step, setStep] = useState<Step>("details");

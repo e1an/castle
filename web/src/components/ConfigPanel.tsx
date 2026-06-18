@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchConfig, saveConfig } from "../api";
+import { maskUrl } from "../utils/url";
 import type { Config } from "../types";
 
 interface Props {
@@ -79,7 +80,7 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
                 <input type="checkbox" checked={cam.enable} onChange={() => toggleCamera(cam.id)} />
                 <span className="camera-row__name">{cam.name || cam.id}</span>
               </label>
-              <span className="camera-row__url">{cam.url}</span>
+              <span className="camera-row__url">{maskUrl(cam.url)}</span>
               <button className="btn btn--danger btn--sm" onClick={() => removeCamera(cam.id)}>Remove</button>
             </div>
           ))}
