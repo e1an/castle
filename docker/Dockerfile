@@ -11,7 +11,7 @@ WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
-COPY --from=ui-builder /src/web/dist internal/api/ui
+COPY --from=ui-builder /src/web/dist/ internal/api/ui/
 RUN CGO_ENABLED=0 GOOS=linux go build -o /castle ./cmd/castle
 
 # ── runtime stage ─────────────────────────────────────────────────────────────
