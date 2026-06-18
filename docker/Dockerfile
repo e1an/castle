@@ -1,20 +1,26 @@
-# ── build stage ──────────────────────────────────────────────────────────────
+# syntax=docker/dockerfile:1
+# ── UI build ──────────────────────────────────────────────────────────────────
 FROM node:20-slim AS ui-builder
 WORKDIR /src/web
 COPY web/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --cache /root/.npm
 COPY web/ ./
 RUN npm run build
 
+# ── Go build ──────────────────────────────────────────────────────────────────
 FROM golang:1.26-bookworm AS go-builder
 WORKDIR /src
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 COPY . .
 COPY --from=ui-builder /src/web/dist/ internal/api/ui/
-RUN CGO_ENABLED=0 GOOS=linux go build -o /castle ./cmd/castle
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    CGO_ENABLED=0 GOOS=linux go build -o /castle ./cmd/castle
 
-# ── runtime stage ─────────────────────────────────────────────────────────────
+# ── Runtime ───────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \

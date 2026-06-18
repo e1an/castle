@@ -1,12 +1,14 @@
-# ── UI build ─────────────────────────────────────────────────────────────────
+# syntax=docker/dockerfile:1
+# ── UI build ──────────────────────────────────────────────────────────────────
 FROM node:20-slim AS ui-builder
 WORKDIR /src/web
 COPY web/package*.json ./
-RUN npm ci
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci --cache /root/.npm
 COPY web/ ./
 RUN npm run build
 
-# ── fetch ONNX Runtime shared library ────────────────────────────────────────
+# ── fetch ONNX Runtime shared library ─────────────────────────────────────────
 FROM debian:bookworm-slim AS onnx-fetcher
 ARG ONNX_VERSION=1.20.1
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
@@ -17,24 +19,26 @@ RUN curl -fsSL \
     && mv /tmp/onnxruntime-linux-x64-${ONNX_VERSION}/lib/libonnxruntime.so.${ONNX_VERSION} \
           /tmp/libonnxruntime.so
 
-# ── Go build (with CGo for onnxruntime_go) ───────────────────────────────────
+# ── Go build (CGo for onnxruntime_go) ─────────────────────────────────────────
 FROM golang:1.26-bookworm AS go-builder
 WORKDIR /src
 
-# Install ONNX Runtime headers + lib so CGo can link against it.
 COPY --from=onnx-fetcher /tmp/libonnxruntime.so /usr/lib/libonnxruntime.so
 RUN ldconfig
 
 COPY go.mod go.sum ./
-RUN go mod download
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod download
 COPY . .
 COPY --from=ui-builder /src/web/dist/ internal/api/ui/
 
 ENV CGO_ENABLED=1
 ENV GOOS=linux
-RUN go build -tags onnx -o /castle ./cmd/castle
+RUN --mount=type=cache,target=/go/pkg/mod \
+    --mount=type=cache,target=/root/.cache/go-build \
+    go build -tags onnx -o /castle ./cmd/castle
 
-# ── runtime ──────────────────────────────────────────────────────────────────
+# ── Runtime ───────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim
 RUN apt-get update && apt-get install -y --no-install-recommends \
         ffmpeg \
@@ -49,7 +53,6 @@ COPY --from=go-builder /castle /usr/local/bin/castle
 VOLUME ["/config", "/recordings"]
 EXPOSE 8080
 
-# ONNX_RUNTIME_LIB tells object.go where to find the shared library.
 ENV ONNX_RUNTIME_LIB=/usr/lib/libonnxruntime.so
 
 ENTRYPOINT ["castle", "-config", "/config/castle.yaml"]
