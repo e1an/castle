@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { fetchConfig, saveConfig } from "../api";
-import { maskUrl } from "../utils/url";
+import { maskUrl, parseUrl, buildUrl } from "../utils/url";
 import type { Config } from "../types";
 
 interface Props {
@@ -8,10 +8,19 @@ interface Props {
   onSaved?: () => void;
 }
 
+interface CamEdit {
+  name: string;
+  baseUrl: string;
+  username: string;
+  password: string;
+}
+
 export function ConfigPanel({ onAddCamera, onSaved }: Props) {
   const [cfg, setCfg] = useState<Config | null>(null);
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [edit, setEdit] = useState<CamEdit>({ name: "", baseUrl: "", username: "", password: "" });
 
   useEffect(() => {
     fetchConfig().then(setCfg).catch((e) => setStatus({ ok: false, msg: String(e) }));
@@ -41,6 +50,7 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
   }
 
   function removeCamera(id: string) {
+    setEditingId(null);
     setCfg((prev) => prev ? { ...prev, cameras: prev.cameras.filter((c) => c.id !== id) } : prev);
   }
 
@@ -49,6 +59,25 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
       ...prev,
       cameras: prev.cameras.map((c) => c.id === id ? { ...c, enable: !c.enable } : c),
     } : prev);
+  }
+
+  function startEdit(id: string) {
+    const cam = cfg?.cameras.find((c) => c.id === id);
+    if (!cam) return;
+    const { baseUrl, username, password } = parseUrl(cam.url);
+    setEdit({ name: cam.name, baseUrl, username, password });
+    setEditingId(id);
+  }
+
+  function commitEdit(id: string) {
+    const url = buildUrl(edit.baseUrl, edit.username, edit.password);
+    setCfg((prev) => prev != null ? {
+      ...prev,
+      cameras: prev.cameras.map((c) =>
+        c.id === id ? { ...c, name: edit.name, url } : c
+      ),
+    } : prev);
+    setEditingId(null);
   }
 
   return (
@@ -75,13 +104,48 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
         {cfg.cameras.length === 0 && <p className="config-section__empty">No cameras configured.</p>}
         <div className="camera-list">
           {cfg.cameras.map((cam) => (
-            <div key={cam.id} className="camera-row">
-              <label className="camera-row__toggle">
-                <input type="checkbox" checked={cam.enable} onChange={() => toggleCamera(cam.id)} />
-                <span className="camera-row__name">{cam.name || cam.id}</span>
-              </label>
-              <span className="camera-row__url">{maskUrl(cam.url)}</span>
-              <button className="btn btn--danger btn--sm" onClick={() => removeCamera(cam.id)}>Remove</button>
+            <div key={cam.id} className="camera-card">
+              {editingId === cam.id ? (
+                <div className="camera-edit">
+                  <div className="config-grid">
+                    <label>
+                      Name
+                      <input value={edit.name} onChange={(e) => setEdit((p) => ({ ...p, name: e.target.value }))} />
+                    </label>
+                    <label>
+                      ID <span className="field-note">(read-only)</span>
+                      <input value={cam.id} disabled />
+                    </label>
+                    <label className="config-grid--full">
+                      Stream URL <span className="field-note">(without credentials)</span>
+                      <input value={edit.baseUrl} onChange={(e) => setEdit((p) => ({ ...p, baseUrl: e.target.value }))} />
+                    </label>
+                    <label>
+                      Username
+                      <input value={edit.username} onChange={(e) => setEdit((p) => ({ ...p, username: e.target.value }))} />
+                    </label>
+                    <label>
+                      Password
+                      <input type="password" value={edit.password} onChange={(e) => setEdit((p) => ({ ...p, password: e.target.value }))} />
+                    </label>
+                  </div>
+                  <div className="camera-edit__actions">
+                    <button className="btn btn--primary btn--sm" onClick={() => commitEdit(cam.id)}>Done</button>
+                    <button className="btn btn--ghost btn--sm" onClick={() => setEditingId(null)}>Cancel</button>
+                    <button className="btn btn--danger btn--sm" onClick={() => removeCamera(cam.id)}>Remove</button>
+                  </div>
+                </div>
+              ) : (
+                <div className="camera-row">
+                  <label className="camera-row__toggle">
+                    <input type="checkbox" checked={cam.enable} onChange={() => toggleCamera(cam.id)} />
+                    <span className="camera-row__name">{cam.name || cam.id}</span>
+                  </label>
+                  <span className="camera-row__url">{maskUrl(cam.url)}</span>
+                  <button className="btn btn--secondary btn--sm" onClick={() => startEdit(cam.id)}>Edit</button>
+                  <button className="btn btn--danger btn--sm" onClick={() => removeCamera(cam.id)}>Remove</button>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -157,7 +221,7 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
         </div>
       </section>
 
-      {/* Server (read-only — requires restart) */}
+      {/* Server */}
       <section className="config-section">
         <h3>Server <span className="config-section__note">(changes require restart)</span></h3>
         <div className="config-grid">

@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { fetchConfig, saveConfig, testStream } from "../api";
-import { maskUrl } from "../utils/url";
+import { maskUrl, buildUrl } from "../utils/url";
 import type { Camera } from "../types";
 
 interface Props {
@@ -14,22 +14,6 @@ function slugify(name: string) {
   return name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "");
 }
 
-// Embed credentials into an RTSP URL: rtsp://user:pass@host/path
-function buildUrl(base: string, user: string, pass: string): string {
-  if (!user.trim()) return base;
-  try {
-    const u = new URL(base);
-    u.username = encodeURIComponent(user);
-    u.password = encodeURIComponent(pass);
-    return u.toString();
-  } catch {
-    // If URL parsing fails, inject manually before the host
-    const proto = base.match(/^[a-z]+:\/\//i)?.[0] ?? "rtsp://";
-    const rest = base.slice(proto.length);
-    const creds = pass ? `${encodeURIComponent(user)}:${encodeURIComponent(pass)}@` : `${encodeURIComponent(user)}@`;
-    return `${proto}${creds}${rest}`;
-  }
-}
 
 
 export function AddCameraWizard({ onDone, onCancel }: Props) {
