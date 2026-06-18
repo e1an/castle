@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/e1an/castle/config"
@@ -78,8 +79,13 @@ func (s *Server) routes() {
 	}
 	fileServer := http.FileServer(http.FS(sub))
 	s.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		f, err := sub.Open(r.URL.Path)
-		if err != nil {
+		// fs.ValidPath rejects leading slashes, so strip before probing.
+		name := strings.TrimPrefix(r.URL.Path, "/")
+		if name == "" {
+			name = "."
+		}
+		if f, err := sub.Open(name); err != nil {
+			// Path not found — serve index.html for client-side routing.
 			r.URL.Path = "/"
 		} else {
 			f.Close()
