@@ -27,10 +27,10 @@ COPY --from=onnx-fetcher /tmp/libonnxruntime.so /usr/lib/libonnxruntime.so
 RUN ldconfig
 
 COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod tidy
 COPY . .
 COPY --from=ui-builder /src/web/dist/ internal/api/ui/
+RUN --mount=type=cache,target=/go/pkg/mod \
+    go mod tidy
 
 RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
