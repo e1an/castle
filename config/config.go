@@ -102,6 +102,7 @@ func Default() *Config {
 		Detect: DetectConfig{
 			MotionThreshold: 0.02,
 			MinObjectScore:  0.5,
+			ModelPath:       "/models/yolov8n.onnx",
 		},
 	}
 }

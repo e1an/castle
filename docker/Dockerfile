@@ -8,6 +8,15 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY web/ ./
 RUN npm run build
 
+# ── YOLOv8n model export ──────────────────────────────────────────────────────
+FROM python:3.12-slim AS model-fetcher
+RUN pip install --no-cache-dir 'ultralytics==8.3.*'
+WORKDIR /models
+RUN python - <<'EOF'
+from ultralytics import YOLO
+YOLO('yolov8n.pt').export(format='onnx', imgsz=640)
+EOF
+
 # ── fetch ONNX Runtime shared library ─────────────────────────────────────────
 FROM debian:bookworm-slim AS onnx-fetcher
 ARG ONNX_VERSION=1.26.0
@@ -47,6 +56,7 @@ COPY --from=onnx-fetcher /tmp/libonnxruntime.so /usr/lib/libonnxruntime.so
 RUN ldconfig
 
 COPY --from=go-builder /castle /usr/local/bin/castle
+COPY --from=model-fetcher /models/yolov8n.onnx /models/yolov8n.onnx
 
 VOLUME ["/config", "/recordings"]
 EXPOSE 8080
