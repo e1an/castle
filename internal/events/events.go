@@ -68,13 +68,12 @@ func (s *Store) migrate() error {
 	`); err != nil {
 		return err
 	}
-	// Additive column migrations — safe to re-run on existing databases.
+	// Additive column migrations — probe with a dummy SELECT so we don't rely
+	// on driver-specific error strings or pragma table-function availability.
 	for _, col := range []string{"snapshot_path", "crop_path"} {
-		var n int
-		s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name=?`, col).Scan(&n)
-		if n == 0 {
-			if _, err := s.db.Exec(`ALTER TABLE events ADD COLUMN ` + col + ` TEXT`); err != nil {
-				return err
+		if _, err := s.db.Exec(`SELECT ` + col + ` FROM events LIMIT 0`); err != nil {
+			if _, err2 := s.db.Exec(`ALTER TABLE events ADD COLUMN ` + col + ` TEXT`); err2 != nil {
+				return err2
 			}
 		}
 	}
@@ -136,7 +135,7 @@ func (s *Store) List(cameraID string, limit int) ([]Event, error) {
 	}
 	defer rows.Close()
 
-	var out []Event
+	out := []Event{}
 	for rows.Next() {
 		var e Event
 		if err := rows.Scan(&e.ID, &e.CameraID, &e.Type, &e.Label, &e.Score, &e.ClipPath, &e.SnapshotPath, &e.CropPath, &e.OccurredAt); err != nil {
