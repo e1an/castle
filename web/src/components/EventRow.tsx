@@ -15,11 +15,17 @@ export function EventRow({ event, selected, onClick }: Props) {
   const time = new Date(event.OccurredAt).toLocaleTimeString();
   const date = new Date(event.OccurredAt).toLocaleDateString();
 
+  const thumbPath = event.CropPath || event.SnapshotPath;
+  const thumbSrc = thumbPath ? `/recordings/${thumbPath}` : null;
+
   return (
     <button
       onClick={onClick}
       className={`event-row${selected ? " event-row--selected" : ""}`}
     >
+      {thumbSrc && (
+        <img className="event-row__thumb" src={thumbSrc} alt="" loading="lazy" />
+      )}
       <span className="event-row__badge">{label}</span>
       <span className="event-row__cam">{event.CameraID}</span>
       <span className="event-row__time">

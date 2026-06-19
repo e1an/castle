@@ -5,19 +5,23 @@ import (
 	"flag"
 	"fmt"
 	"image"
+	"image/jpeg"
 	"log"
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sync"
 	"syscall"
 	"time"
 
+	webpush "github.com/SherClockHolmes/webpush-go"
 	"github.com/e1an/castle/config"
 	"github.com/e1an/castle/internal/api"
 	"github.com/e1an/castle/internal/detect"
 	"github.com/e1an/castle/internal/events"
 	"github.com/e1an/castle/internal/notify"
+	"github.com/e1an/castle/internal/push"
 	"github.com/e1an/castle/internal/record"
 	"github.com/e1an/castle/internal/stream"
 )
@@ -50,6 +54,21 @@ func main() {
 	}
 	defer store.Close()
 
+	// Generate VAPID key pair once and persist — required for web push.
+	if cfg.Notify.VAPIDPublicKey == "" || cfg.Notify.VAPIDPrivateKey == "" {
+		priv, pub, err := webpush.GenerateVAPIDKeys()
+		if err != nil {
+			log.Fatalf("vapid keygen: %v", err)
+		}
+		cfg.Notify.VAPIDPrivateKey = priv
+		cfg.Notify.VAPIDPublicKey = pub
+		if err := config.Save(*cfgPath, cfg); err != nil {
+			log.Printf("warning: could not persist VAPID keys: %v", err)
+		}
+		log.Println("generated VAPID key pair")
+	}
+	pushSender := push.NewSender(cfg.Notify.VAPIDPublicKey, cfg.Notify.VAPIDPrivateKey)
+
 	mgr := stream.NewManager()
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -61,7 +80,7 @@ func main() {
 		objDetector detect.ObjectDetector
 		detMu       sync.Mutex
 	)
-	if cfg.Detect.EnableObjectDetect && cfg.Detect.ModelPath != "" {
+	if cfg.Detect.ModelPath != "" {
 		od, odErr := detect.NewObjectDetector(cfg.Detect.ModelPath, cfg.Detect.MinObjectScore)
 		if odErr != nil {
 			log.Fatalf("object detector: %v", odErr)
@@ -71,6 +90,18 @@ func main() {
 			defer objDetector.Close()
 			log.Printf("object detection enabled (model: %s, min score: %.2f)",
 				cfg.Detect.ModelPath, cfg.Detect.MinObjectScore)
+		}
+	}
+
+	var faceDetector detect.ObjectDetector
+	if cfg.Detect.FaceModelPath != "" {
+		fd, fdErr := detect.NewFaceDetector(cfg.Detect.FaceModelPath, cfg.Detect.MinObjectScore)
+		if fdErr != nil {
+			log.Printf("face detector: %v", fdErr)
+		} else if fd != nil {
+			faceDetector = fd
+			defer faceDetector.Close()
+			log.Printf("face detection enabled (model: %s)", cfg.Detect.FaceModelPath)
 		}
 	}
 
@@ -88,6 +119,19 @@ func main() {
 		return dets
 	}
 
+	runFaceDetect := func(frame image.Image) []detect.Detection {
+		if faceDetector == nil {
+			return nil
+		}
+		detMu.Lock()
+		defer detMu.Unlock()
+		dets, err := faceDetector.Detect(frame)
+		if err != nil {
+			return nil
+		}
+		return dets
+	}
+
 	var cfgMu sync.RWMutex
 
 	startCameras := func(ctx context.Context, c *config.Config) {
@@ -97,10 +141,11 @@ func main() {
 
 		// perCam tracks per-camera clip state to prevent motion storms.
 		type perCam struct {
-			mu       sync.Mutex
-			active   bool   // a clip goroutine is currently running
-			detLabel string // best object label seen across all frames this clip
-			detScore float64
+			mu          sync.Mutex
+			active      bool   // a clip goroutine is currently running
+			detLabel    string // best object label seen across all frames this clip
+			detScore    float64
+			lastFiredAt map[string]time.Time // key: label or "motion"; guards notification cooldown
 		}
 		camState := make(map[string]*perCam)
 
@@ -108,12 +153,15 @@ func main() {
 			if !cam.Enable {
 				continue
 			}
-			camState[cam.ID] = &perCam{}
+			camState[cam.ID] = &perCam{lastFiredAt: make(map[string]time.Time)}
 			cam := cam
 
 			// Effective per-camera detect settings (global defaults + per-camera overrides).
+			// Object and face detection are enabled by default when their model is loaded;
+			// individual cameras can opt out via enable_object_detect / enable_face_detect.
 			motionThreshold := c.Detect.MotionThreshold
-			enableOD := c.Detect.EnableObjectDetect && objDetector != nil
+			enableOD := objDetector != nil
+			enableFace := faceDetector != nil
 			var camDetect config.CameraDetect
 			if cam.Detect != nil {
 				camDetect = *cam.Detect
@@ -122,6 +170,9 @@ func main() {
 				}
 				if camDetect.EnableObjectDetect != nil {
 					enableOD = *camDetect.EnableObjectDetect && objDetector != nil
+				}
+				if camDetect.EnableFaceDetect != nil {
+					enableFace = *camDetect.EnableFaceDetect && faceDetector != nil
 				}
 			}
 			detectors[cam.ID] = detect.NewMotionDetector(motionThreshold)
@@ -171,6 +222,10 @@ func main() {
 
 					// Run detection on the trigger frame concurrently while the
 					// clip records, so we don't delay the clip start.
+					var (
+						bestFaceBox image.Rectangle
+						hasFace     bool
+					)
 					detDone := make(chan struct{})
 					go func() {
 						defer close(detDone)
@@ -184,6 +239,12 @@ func main() {
 									pc.detScore = score
 								}
 								pc.mu.Unlock()
+							}
+						}
+						if enableFace {
+							if faceDets := runFaceDetect(frame); len(faceDets) > 0 {
+								bestFaceBox = faceDets[0].Box
+								hasFace = true
 							}
 						}
 					}()
@@ -214,17 +275,67 @@ func main() {
 						log.Printf("[%s] best detection: %s (%.0f%%)", camID, label, score*100)
 					}
 
+					if sp, err := saveSnapshot(c.Record.Path, camID, evt.OccurredAt, frame); err == nil {
+						evt.SnapshotPath = sp
+					} else {
+						log.Printf("[%s] snapshot: %v", camID, err)
+					}
+					if hasFace {
+						if cp, err := saveCrop(c.Record.Path, camID, evt.OccurredAt, frame, bestFaceBox); err == nil {
+							evt.CropPath = cp
+						} else {
+							log.Printf("[%s] face crop: %v", camID, err)
+						}
+					}
+
 					if _, err := store.Insert(evt); err != nil {
 						log.Printf("[%s] db insert: %v", camID, err)
 					}
-					notifier.Send(notify.Payload{
-						CameraID:  camID,
-						EventType: string(evt.Type),
-						Label:     evt.Label,
-						Score:     evt.Score,
-						ClipPath:  clipPath,
-						Timestamp: evt.OccurredAt,
-					})
+
+					cooldownKey := "motion"
+					if evt.Label != "" {
+						cooldownKey = evt.Label
+					}
+					cooldown := time.Duration(cam.CooldownSeconds) * time.Second
+					shouldNotify := true
+					if cooldown > 0 {
+						pc.mu.Lock()
+						if t, ok := pc.lastFiredAt[cooldownKey]; ok && time.Since(t) < cooldown {
+							shouldNotify = false
+							log.Printf("[%s] notification suppressed (cooldown %ds, last fired %.0fs ago)",
+								camID, cam.CooldownSeconds, time.Since(t).Seconds())
+						} else {
+							pc.lastFiredAt[cooldownKey] = time.Now()
+						}
+						pc.mu.Unlock()
+					}
+
+					if shouldNotify {
+						notifier.Send(notify.Payload{
+							CameraID:  camID,
+							EventType: string(evt.Type),
+							Label:     evt.Label,
+							Score:     evt.Score,
+							ClipPath:  clipPath,
+							Timestamp: evt.OccurredAt,
+						})
+						subs, _ := store.ListPushSubscriptions()
+						if len(subs) > 0 {
+							imgURL := ""
+							if evt.CropPath != "" {
+								imgURL = "/recordings/" + evt.CropPath
+							} else if evt.SnapshotPath != "" {
+								imgURL = "/recordings/" + evt.SnapshotPath
+							}
+							pushSender.Send(subs, push.Payload{
+								Title:    "Castle — " + cam.Name,
+								Body:     pushEventBody(evt),
+								CameraID: camID,
+								URL:      "/",
+								ImageURL: imgURL,
+							})
+						}
+					}
 				}()
 			}
 
@@ -316,6 +427,74 @@ func loadConfig(path string) (*config.Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+func saveSnapshot(recPath, camID string, ts time.Time, img image.Image) (string, error) {
+	dir := filepath.Join(recPath, camID, "clips")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	name := ts.Format("20060102T150405Z") + "_snap.jpg"
+	f, err := os.Create(filepath.Join(dir, name))
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if err := jpeg.Encode(f, img, &jpeg.Options{Quality: 85}); err != nil {
+		return "", err
+	}
+	return camID + "/clips/" + name, nil
+}
+
+func saveCrop(recPath, camID string, ts time.Time, img image.Image, box image.Rectangle) (string, error) {
+	// Expand the bounding box by 20% on each side so the crop includes
+	// forehead, chin, and ears rather than clipping at the raw detection edge.
+	padX := box.Dx() / 5
+	padY := box.Dy() / 5
+	box = image.Rect(
+		box.Min.X-padX, box.Min.Y-padY,
+		box.Max.X+padX, box.Max.Y+padY,
+	).Intersect(img.Bounds())
+
+	cropped := subImage(img, box)
+
+	dir := filepath.Join(recPath, camID, "clips")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return "", err
+	}
+	name := ts.Format("20060102T150405Z") + "_face.jpg"
+	f, err := os.Create(filepath.Join(dir, name))
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	if err := jpeg.Encode(f, cropped, &jpeg.Options{Quality: 90}); err != nil {
+		return "", err
+	}
+	return camID + "/clips/" + name, nil
+}
+
+func subImage(img image.Image, box image.Rectangle) image.Image {
+	type subImager interface {
+		SubImage(image.Rectangle) image.Image
+	}
+	if si, ok := img.(subImager); ok {
+		return si.SubImage(box)
+	}
+	dst := image.NewRGBA(image.Rect(0, 0, box.Dx(), box.Dy()))
+	for y := box.Min.Y; y < box.Max.Y; y++ {
+		for x := box.Min.X; x < box.Max.X; x++ {
+			dst.Set(x-box.Min.X, y-box.Min.Y, img.At(x, y))
+		}
+	}
+	return dst
+}
+
+func pushEventBody(evt *events.Event) string {
+	if evt.Label != "" {
+		return fmt.Sprintf("%s detected (%.0f%%)", evt.Label, evt.Score*100)
+	}
+	return "Motion detected"
 }
 
 // pickBestDetection filters detections by the camera's label allow-list and

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { fetchConfig, saveConfig } from "../api";
 import { maskUrl, parseUrl, buildUrl } from "../utils/url";
 import type { CameraDetect, Config } from "../types";
+import { PushToggle } from "./PushToggle";
 
 interface Props {
   onAddCamera: () => void;
@@ -19,8 +20,10 @@ interface CamEdit {
   baseUrl: string;
   username: string;
   password: string;
+  cooldownSeconds: string;
   detectMotionThreshold: string;
   detectEnableOD: "" | "true" | "false";
+  detectEnableFace: "" | "true" | "false";
   detectMinScore: string;
   labels: LabelEntry[];
 }
@@ -32,7 +35,8 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
   const [editingId, setEditingId] = useState<string | null>(null);
   const [edit, setEdit] = useState<CamEdit>({
     name: "", baseUrl: "", username: "", password: "",
-    detectMotionThreshold: "", detectEnableOD: "", detectMinScore: "", labels: [],
+    cooldownSeconds: "",
+    detectMotionThreshold: "", detectEnableOD: "", detectEnableFace: "", detectMinScore: "", labels: [],
   });
 
   useEffect(() => {
@@ -81,8 +85,10 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
     const d = cam.detect;
     setEdit({
       name: cam.name, baseUrl, username, password,
+      cooldownSeconds: cam.cooldown_seconds != null ? String(cam.cooldown_seconds) : "",
       detectMotionThreshold: d?.motion_threshold != null ? String(d.motion_threshold) : "",
       detectEnableOD: d?.enable_object_detect != null ? (d.enable_object_detect ? "true" : "false") : "",
+      detectEnableFace: d?.enable_face_detect != null ? (d.enable_face_detect ? "true" : "false") : "",
       detectMinScore: d?.min_object_score != null ? String(d.min_object_score) : "",
       labels: d?.labels
         ? Object.entries(d.labels).map(([label, lc]) => ({
@@ -98,10 +104,11 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
   function commitEdit(id: string) {
     const url = buildUrl(edit.baseUrl, edit.username, edit.password);
     const detect = buildDetect(edit);
+    const cooldown_seconds = edit.cooldownSeconds !== "" ? Number(edit.cooldownSeconds) : undefined;
     setCfg((prev) => prev != null ? {
       ...prev,
       cameras: prev.cameras.map((c) =>
-        c.id === id ? { ...c, name: edit.name, url, detect } : c
+        c.id === id ? { ...c, name: edit.name, url, cooldown_seconds, detect } : c
       ),
     } : prev);
     setEditingId(null);
@@ -111,6 +118,7 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
     const d: CameraDetect = {};
     if (e.detectMotionThreshold !== "") d.motion_threshold = Number(e.detectMotionThreshold);
     if (e.detectEnableOD !== "") d.enable_object_detect = e.detectEnableOD === "true";
+    if (e.detectEnableFace !== "") d.enable_face_detect = e.detectEnableFace === "true";
     if (e.detectMinScore !== "") d.min_object_score = Number(e.detectMinScore);
     const validLabels = e.labels.filter((l) => l.label.trim() !== "");
     if (validLabels.length > 0) {
@@ -174,18 +182,33 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
                       <input type="password" value={edit.password} onChange={(e) => setEdit((p) => ({ ...p, password: e.target.value }))} />
                     </label>
                     <label>
+                      Notification cooldown (s) <span className="field-note">(0 or blank = always notify)</span>
+                      <input type="number" min={0} step={10}
+                        value={edit.cooldownSeconds} placeholder="0"
+                        onChange={(e) => setEdit((p) => ({ ...p, cooldownSeconds: e.target.value }))} />
+                    </label>
+                    <label>
                       Motion threshold <span className="field-note">(blank = global)</span>
                       <input type="number" step={0.001} min={0} max={1}
                         value={edit.detectMotionThreshold} placeholder="global"
                         onChange={(e) => setEdit((p) => ({ ...p, detectMotionThreshold: e.target.value }))} />
                     </label>
                     <label>
-                      Object detect
+                      Object detection
                       <select value={edit.detectEnableOD}
                         onChange={(e) => setEdit((p) => ({ ...p, detectEnableOD: e.target.value as "" | "true" | "false" }))}>
-                        <option value="">Use global</option>
-                        <option value="true">Enabled</option>
-                        <option value="false">Disabled</option>
+                        <option value="">On (model loaded)</option>
+                        <option value="true">On</option>
+                        <option value="false">Off</option>
+                      </select>
+                    </label>
+                    <label>
+                      Face detection
+                      <select value={edit.detectEnableFace}
+                        onChange={(e) => setEdit((p) => ({ ...p, detectEnableFace: e.target.value as "" | "true" | "false" }))}>
+                        <option value="">On (model loaded)</option>
+                        <option value="true">On</option>
+                        <option value="false">Off</option>
                       </select>
                     </label>
                     <label>
@@ -296,11 +319,6 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
             <input type="number" step={0.001} min={0} max={1} value={cfg.detect.motion_threshold}
               onChange={(e) => set("detect", { motion_threshold: Number(e.target.value) })} />
           </label>
-          <label className="config-grid__checkbox">
-            <input type="checkbox" checked={cfg.detect.enable_object_detect}
-              onChange={(e) => set("detect", { enable_object_detect: e.target.checked })} />
-            Enable object detection (ONNX)
-          </label>
           <label>
             Min object score
             <input type="number" step={0.05} min={0} max={1} value={cfg.detect.min_object_score}
@@ -310,6 +328,11 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
             Model path
             <input value={cfg.detect.model_path}
               onChange={(e) => set("detect", { model_path: e.target.value })} />
+          </label>
+          <label>
+            Face model path <span className="field-note">(yolov8n-face.onnx, optional)</span>
+            <input value={cfg.detect.face_model_path ?? ""}
+              onChange={(e) => set("detect", { face_model_path: e.target.value })} />
           </label>
         </div>
       </section>
@@ -328,6 +351,9 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
             <input placeholder="https://ntfy.sh/my-alerts" value={cfg.notify.ntfy_topic}
               onChange={(e) => set("notify", { ntfy_topic: e.target.value })} />
           </label>
+        </div>
+        <div style={{ marginTop: "1rem" }}>
+          <PushToggle />
         </div>
       </section>
 

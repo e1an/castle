@@ -3,6 +3,7 @@ module github.com/e1an/castle
 go 1.26.4
 
 require (
+	github.com/SherClockHolmes/webpush-go v1.3.0
 	github.com/dustin/go-humanize v1.0.1 // indirect
 	github.com/google/uuid v1.6.0 // indirect
 	github.com/mattn/go-isatty v0.0.20 // indirect

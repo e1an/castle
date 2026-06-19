@@ -26,20 +26,22 @@ type LabelConfig struct {
 }
 
 // CameraDetect holds per-camera detection overrides.
-// Nil pointer fields fall back to the global DetectConfig value.
+// Nil pointer fields mean "use the global default" (enabled when a model is loaded).
 type CameraDetect struct {
 	MotionThreshold    *float64               `yaml:"motion_threshold,omitempty"     json:"motion_threshold,omitempty"`
 	EnableObjectDetect *bool                  `yaml:"enable_object_detect,omitempty" json:"enable_object_detect,omitempty"`
+	EnableFaceDetect   *bool                  `yaml:"enable_face_detect,omitempty"   json:"enable_face_detect,omitempty"`
 	MinObjectScore     *float64               `yaml:"min_object_score,omitempty"     json:"min_object_score,omitempty"`
 	Labels             map[string]LabelConfig `yaml:"labels,omitempty"               json:"labels,omitempty"`
 }
 
 type Camera struct {
-	ID     string        `yaml:"id"               json:"id"`
-	Name   string        `yaml:"name"             json:"name"`
-	URL    string        `yaml:"url"              json:"url"`
-	Enable bool          `yaml:"enable"           json:"enable"`
-	Detect *CameraDetect `yaml:"detect,omitempty" json:"detect,omitempty"`
+	ID              string        `yaml:"id"                         json:"id"`
+	Name            string        `yaml:"name"                       json:"name"`
+	URL             string        `yaml:"url"                        json:"url"`
+	Enable          bool          `yaml:"enable"                     json:"enable"`
+	CooldownSeconds int           `yaml:"cooldown_seconds,omitempty" json:"cooldown_seconds,omitempty"`
+	Detect          *CameraDetect `yaml:"detect,omitempty"           json:"detect,omitempty"`
 }
 
 type RecordConfig struct {
@@ -50,15 +52,17 @@ type RecordConfig struct {
 }
 
 type DetectConfig struct {
-	MotionThreshold    float64 `yaml:"motion_threshold"     json:"motion_threshold"`
-	MinObjectScore     float64 `yaml:"min_object_score"     json:"min_object_score"`
-	ModelPath          string  `yaml:"model_path"           json:"model_path"`
-	EnableObjectDetect bool    `yaml:"enable_object_detect" json:"enable_object_detect"`
+	MotionThreshold float64 `yaml:"motion_threshold" json:"motion_threshold"`
+	MinObjectScore  float64 `yaml:"min_object_score" json:"min_object_score"`
+	ModelPath       string  `yaml:"model_path"       json:"model_path"`
+	FaceModelPath   string  `yaml:"face_model_path"  json:"face_model_path"`
 }
 
 type NotifyConfig struct {
-	WebhookURL string `yaml:"webhook_url" json:"webhook_url"`
-	NtfyTopic  string `yaml:"ntfy_topic"  json:"ntfy_topic"`
+	WebhookURL      string `yaml:"webhook_url"       json:"webhook_url"`
+	NtfyTopic       string `yaml:"ntfy_topic"        json:"ntfy_topic"`
+	VAPIDPublicKey  string `yaml:"vapid_public_key"  json:"-"`
+	VAPIDPrivateKey string `yaml:"vapid_private_key" json:"-"`
 }
 
 func Load(path string) (*Config, error) {
@@ -96,9 +100,8 @@ func Default() *Config {
 			ContinuousMode:  false,
 		},
 		Detect: DetectConfig{
-			MotionThreshold:    0.02,
-			MinObjectScore:     0.5,
-			EnableObjectDetect: false,
+			MotionThreshold: 0.02,
+			MinObjectScore:  0.5,
 		},
 	}
 }

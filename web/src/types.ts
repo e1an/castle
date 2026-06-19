@@ -5,6 +5,8 @@ export interface Event {
   Label: string;
   Score: number;
   ClipPath: string;
+  SnapshotPath: string;
+  CropPath: string;
   OccurredAt: string; // ISO 8601
 }
 
@@ -16,6 +18,7 @@ export interface LabelConfig {
 export interface CameraDetect {
   motion_threshold?: number | null;
   enable_object_detect?: boolean | null;
+  enable_face_detect?: boolean | null;
   min_object_score?: number | null;
   labels?: Record<string, LabelConfig> | null;
 }
@@ -25,6 +28,7 @@ export interface Camera {
   name: string;
   url: string;
   enable: boolean;
+  cooldown_seconds?: number;
   detect?: CameraDetect | null;
 }
 
@@ -44,7 +48,7 @@ export interface DetectConfig {
   motion_threshold: number;
   min_object_score: number;
   model_path: string;
-  enable_object_detect: boolean;
+  face_model_path?: string;
 }
 
 export interface NotifyConfig {

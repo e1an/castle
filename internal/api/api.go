@@ -71,6 +71,9 @@ func (s *Server) routes() {
 	s.mux.HandleFunc("PUT /api/config", s.handlePutConfig)
 	s.mux.HandleFunc("POST /api/reload", s.handleReload)
 	s.mux.HandleFunc("POST /api/test-stream", s.handleTestStream)
+	s.mux.HandleFunc("GET /api/push/vapid-public-key", s.handlePushVapidKey)
+	s.mux.HandleFunc("POST /api/push/subscribe", s.handlePushSubscribe)
+	s.mux.HandleFunc("DELETE /api/push/subscribe", s.handlePushUnsubscribe)
 	s.mux.HandleFunc("GET /recordings/", s.handleServeRecording)
 
 	sub, err := fs.Sub(uiFiles, "ui")
@@ -129,6 +132,10 @@ func (s *Server) handlePutConfig(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid JSON: "+err.Error(), http.StatusBadRequest)
 		return
 	}
+
+	// Preserve server-only fields that the frontend never roundtrips.
+	incoming.Notify.VAPIDPublicKey = s.cfg.Notify.VAPIDPublicKey
+	incoming.Notify.VAPIDPrivateKey = s.cfg.Notify.VAPIDPrivateKey
 
 	if err := config.Save(s.configPath, &incoming); err != nil {
 		http.Error(w, "save failed: "+err.Error(), http.StatusInternalServerError)
@@ -196,4 +203,43 @@ func (s *Server) handleTestStream(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleServeRecording(w http.ResponseWriter, r *http.Request) {
 	rel := r.URL.Path[len("/recordings/"):]
 	http.ServeFile(w, r, filepath.Join(s.recDir, rel))
+}
+
+func (s *Server) handlePushVapidKey(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"public_key": s.cfg.Notify.VAPIDPublicKey})
+}
+
+func (s *Server) handlePushSubscribe(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Endpoint string `json:"endpoint"`
+		P256DH   string `json:"p256dh"`
+		Auth     string `json:"auth"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Endpoint == "" {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.UpsertPushSubscription(body.Endpoint, body.P256DH, body.Auth); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
+}
+
+func (s *Server) handlePushUnsubscribe(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Endpoint string `json:"endpoint"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.Endpoint == "" {
+		http.Error(w, "invalid body", http.StatusBadRequest)
+		return
+	}
+	if err := s.store.RemovePushSubscription(body.Endpoint); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]string{"status": "ok"})
 }
