@@ -88,41 +88,38 @@ func main() {
 		objDetector detect.ObjectDetector
 		detMu       sync.Mutex
 	)
-	if cfg.Detect.ModelPath != "" {
-		const bundledModel = "/models/yolov8n.onnx"
-		if _, err := os.Stat(cfg.Detect.ModelPath); os.IsNotExist(err) {
-			if _, err2 := os.Stat(bundledModel); err2 == nil {
-				log.Printf("model not found at %s, falling back to %s", cfg.Detect.ModelPath, bundledModel)
-				cfg.Detect.ModelPath = bundledModel
+	resolveModel := func(configured, bundled string) string {
+		if configured != "" {
+			if _, err := os.Stat(configured); err == nil {
+				return configured
 			}
 		}
-		od, odErr := detect.NewObjectDetector(cfg.Detect.ModelPath, cfg.Detect.MinObjectScore)
+		if _, err := os.Stat(bundled); err == nil {
+			return bundled
+		}
+		return ""
+	}
+
+	if p := resolveModel(cfg.Detect.ModelPath, "/models/yolov8n.onnx"); p != "" {
+		od, odErr := detect.NewObjectDetector(p, cfg.Detect.MinObjectScore)
 		if odErr != nil {
 			log.Printf("object detector: %v", odErr)
 		} else if od != nil {
 			objDetector = od
 			defer objDetector.Close()
-			log.Printf("object detection enabled (model: %s, min score: %.2f)",
-				cfg.Detect.ModelPath, cfg.Detect.MinObjectScore)
+			log.Printf("object detection enabled (model: %s, min score: %.2f)", p, cfg.Detect.MinObjectScore)
 		}
 	}
 
 	var faceDetector detect.ObjectDetector
-	if cfg.Detect.FaceModelPath != "" {
-		const bundledFace = "/models/yolov8n-face.onnx"
-		if _, err := os.Stat(cfg.Detect.FaceModelPath); os.IsNotExist(err) {
-			if _, err2 := os.Stat(bundledFace); err2 == nil {
-				log.Printf("face model not found at %s, falling back to %s", cfg.Detect.FaceModelPath, bundledFace)
-				cfg.Detect.FaceModelPath = bundledFace
-			}
-		}
-		fd, fdErr := detect.NewFaceDetector(cfg.Detect.FaceModelPath, cfg.Detect.MinObjectScore)
+	if p := resolveModel(cfg.Detect.FaceModelPath, "/models/yolov8n-face.onnx"); p != "" {
+		fd, fdErr := detect.NewFaceDetector(p, cfg.Detect.MinObjectScore)
 		if fdErr != nil {
 			log.Printf("face detector: %v", fdErr)
 		} else if fd != nil {
 			faceDetector = fd
 			defer faceDetector.Close()
-			log.Printf("face detection enabled (model: %s)", cfg.Detect.FaceModelPath)
+			log.Printf("face detection enabled (model: %s)", p)
 		}
 	}
 

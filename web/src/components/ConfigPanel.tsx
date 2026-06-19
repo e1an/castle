@@ -324,16 +324,6 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
             <input type="number" step={0.05} min={0} max={1} value={cfg.detect.min_object_score}
               onChange={(e) => set("detect", { min_object_score: Number(e.target.value) })} />
           </label>
-          <label>
-            Model path
-            <input value={cfg.detect.model_path}
-              onChange={(e) => set("detect", { model_path: e.target.value })} />
-          </label>
-          <label>
-            Face model path <span className="field-note">(yolov8n-face.onnx, optional)</span>
-            <input value={cfg.detect.face_model_path ?? ""}
-              onChange={(e) => set("detect", { face_model_path: e.target.value })} />
-          </label>
         </div>
       </section>
 

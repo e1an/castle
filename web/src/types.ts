@@ -47,8 +47,6 @@ export interface RecordConfig {
 export interface DetectConfig {
   motion_threshold: number;
   min_object_score: number;
-  model_path: string;
-  face_model_path?: string;
 }
 
 export interface NotifyConfig {
