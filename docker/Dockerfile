@@ -10,7 +10,7 @@ RUN npm run build
 
 # ── fetch ONNX Runtime shared library ─────────────────────────────────────────
 FROM debian:bookworm-slim AS onnx-fetcher
-ARG ONNX_VERSION=1.20.1
+ARG ONNX_VERSION=1.26.0
 RUN apt-get update && apt-get install -y --no-install-recommends curl ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN curl -fsSL \
