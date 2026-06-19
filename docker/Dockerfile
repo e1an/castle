@@ -13,7 +13,8 @@ FROM python:3.12-slim AS model-fetcher
 RUN apt-get update && apt-get install -y --no-install-recommends \
         libglib2.0-0 libgomp1 \
     && rm -rf /var/lib/apt/lists/*
-RUN pip install --no-cache-dir opencv-python-headless 'ultralytics==8.3.*'
+RUN pip install --no-cache-dir 'ultralytics==8.3.*' \
+    && pip install --no-cache-dir --force-reinstall opencv-python-headless
 WORKDIR /models
 RUN python -c "from ultralytics import YOLO; YOLO('yolov8n.pt').export(format='onnx', imgsz=640)"
 
