@@ -83,9 +83,8 @@ func main() {
 	if cfg.Detect.ModelPath != "" {
 		od, odErr := detect.NewObjectDetector(cfg.Detect.ModelPath, cfg.Detect.MinObjectScore)
 		if odErr != nil {
-			log.Fatalf("object detector: %v", odErr)
-		}
-		if od != nil {
+			log.Printf("object detector: %v", odErr)
+		} else if od != nil {
 			objDetector = od
 			defer objDetector.Close()
 			log.Printf("object detection enabled (model: %s, min score: %.2f)",
