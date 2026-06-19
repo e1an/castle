@@ -124,7 +124,9 @@ func (s *Store) Insert(e *Event) (int64, error) {
 
 func (s *Store) List(cameraID string, limit int) ([]Event, error) {
 	rows, err := s.db.Query(
-		`SELECT id, camera_id, type, label, score, clip_path, snapshot_path, crop_path, occurred_at
+		`SELECT id, camera_id, type, label, score,
+		        COALESCE(clip_path, ''), COALESCE(snapshot_path, ''), COALESCE(crop_path, ''),
+		        occurred_at
 		 FROM events
 		 WHERE (? = '' OR camera_id = ?)
 		 ORDER BY occurred_at DESC LIMIT ?`,
