@@ -28,6 +28,9 @@ RUN curl -fsSL \
     | tar -xz -C /tmp \
     && mv /tmp/onnxruntime-linux-x64-${ONNX_VERSION}/lib/libonnxruntime.so.${ONNX_VERSION} \
           /tmp/libonnxruntime.so
+RUN curl -fsSL \
+    "https://github.com/lindevs/yolov8-face/releases/download/1.0.1/yolov8n-face-lindevs.onnx" \
+    -o /tmp/yolov8n-face.onnx
 
 # ── Go build ──────────────────────────────────────────────────────────────────
 FROM golang:1.26-bookworm AS go-builder
@@ -58,6 +61,7 @@ RUN ldconfig
 
 COPY --from=go-builder /castle /usr/local/bin/castle
 COPY --from=model-fetcher /models/yolov8n.onnx /models/yolov8n.onnx
+COPY --from=onnx-fetcher /tmp/yolov8n-face.onnx /models/yolov8n-face.onnx
 
 VOLUME ["/config", "/recordings"]
 EXPOSE 8080

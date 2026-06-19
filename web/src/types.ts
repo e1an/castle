@@ -35,6 +35,8 @@ export interface Camera {
 export interface ServerConfig {
   host: string;
   port: number;
+  tls_cert?: string;
+  tls_key?: string;
 }
 
 export interface RecordConfig {

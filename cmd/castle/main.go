@@ -2,11 +2,19 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
 	"flag"
 	"fmt"
 	"image"
 	"image/jpeg"
 	"log"
+	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -101,6 +109,13 @@ func main() {
 
 	var faceDetector detect.ObjectDetector
 	if cfg.Detect.FaceModelPath != "" {
+		const bundledFace = "/models/yolov8n-face.onnx"
+		if _, err := os.Stat(cfg.Detect.FaceModelPath); os.IsNotExist(err) {
+			if _, err2 := os.Stat(bundledFace); err2 == nil {
+				log.Printf("face model not found at %s, falling back to %s", cfg.Detect.FaceModelPath, bundledFace)
+				cfg.Detect.FaceModelPath = bundledFace
+			}
+		}
 		fd, fdErr := detect.NewFaceDetector(cfg.Detect.FaceModelPath, cfg.Detect.MinObjectScore)
 		if fdErr != nil {
 			log.Printf("face detector: %v", fdErr)
@@ -410,9 +425,23 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("API listening on %s", srv.Addr)
-		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatalf("http: %v", err)
+		cert, key := cfg.Server.TLSCert, cfg.Server.TLSKey
+		if cert != "" && key != "" {
+			if _, err := os.Stat(cert); os.IsNotExist(err) {
+				if err := generateSelfSignedCert(cert, key); err != nil {
+					log.Fatalf("tls: generate cert: %v", err)
+				}
+				log.Printf("generated self-signed TLS cert → %s", cert)
+			}
+			log.Printf("API listening on https://%s (TLS)", srv.Addr)
+			if err := srv.ListenAndServeTLS(cert, key); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("https: %v", err)
+			}
+		} else {
+			log.Printf("API listening on http://%s", srv.Addr)
+			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Fatalf("http: %v", err)
+			}
 		}
 	}()
 
@@ -501,6 +530,69 @@ func pushEventBody(evt *events.Event) string {
 		return fmt.Sprintf("%s detected (%.0f%%)", evt.Label, evt.Score*100)
 	}
 	return "Motion detected"
+}
+
+// generateSelfSignedCert creates a self-signed ECDSA cert valid for all local
+// network interfaces, written as PEM files at certPath and keyPath.
+func generateSelfSignedCert(certPath, keyPath string) error {
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		return err
+	}
+
+	// Collect all local IPs so the cert is valid regardless of which interface
+	// the client connects through.
+	var ips []net.IP
+	ips = append(ips, net.ParseIP("127.0.0.1"), net.ParseIP("::1"))
+	if ifaces, err := net.Interfaces(); err == nil {
+		for _, iface := range ifaces {
+			if addrs, err := iface.Addrs(); err == nil {
+				for _, a := range addrs {
+					if ipnet, ok := a.(*net.IPNet); ok {
+						ips = append(ips, ipnet.IP)
+					}
+				}
+			}
+		}
+	}
+
+	serial, _ := rand.Int(rand.Reader, new(big.Int).Lsh(big.NewInt(1), 128))
+	tmpl := &x509.Certificate{
+		SerialNumber: serial,
+		Subject:      pkix.Name{Organization: []string{"Castle NVR"}},
+		IPAddresses:  ips,
+		NotBefore:    time.Now().Add(-time.Minute),
+		NotAfter:     time.Now().Add(10 * 365 * 24 * time.Hour),
+		KeyUsage:     x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+
+	certDER, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		return err
+	}
+
+	if err := os.MkdirAll(filepath.Dir(certPath), 0o755); err != nil {
+		return err
+	}
+	cf, err := os.Create(certPath)
+	if err != nil {
+		return err
+	}
+	defer cf.Close()
+	pem.Encode(cf, &pem.Block{Type: "CERTIFICATE", Bytes: certDER})
+
+	kf, err := os.OpenFile(keyPath, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o600)
+	if err != nil {
+		return err
+	}
+	defer kf.Close()
+	keyDER, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		return err
+	}
+	pem.Encode(kf, &pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER})
+	return nil
 }
 
 // pickBestDetection filters detections by the camera's label allow-list and
