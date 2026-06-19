@@ -2,7 +2,6 @@ package events
 
 import (
 	"database/sql"
-	"strings"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -70,12 +69,13 @@ func (s *Store) migrate() error {
 		return err
 	}
 	// Additive column migrations — safe to re-run on existing databases.
-	for _, stmt := range []string{
-		"ALTER TABLE events ADD COLUMN snapshot_path TEXT",
-		"ALTER TABLE events ADD COLUMN crop_path TEXT",
-	} {
-		if _, err := s.db.Exec(stmt); err != nil && !strings.Contains(err.Error(), "duplicate column name") {
-			return err
+	for _, col := range []string{"snapshot_path", "crop_path"} {
+		var n int
+		s.db.QueryRow(`SELECT COUNT(*) FROM pragma_table_info('events') WHERE name=?`, col).Scan(&n)
+		if n == 0 {
+			if _, err := s.db.Exec(`ALTER TABLE events ADD COLUMN ` + col + ` TEXT`); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

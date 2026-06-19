@@ -81,6 +81,13 @@ func main() {
 		detMu       sync.Mutex
 	)
 	if cfg.Detect.ModelPath != "" {
+		const bundledModel = "/models/yolov8n.onnx"
+		if _, err := os.Stat(cfg.Detect.ModelPath); os.IsNotExist(err) {
+			if _, err2 := os.Stat(bundledModel); err2 == nil {
+				log.Printf("model not found at %s, falling back to %s", cfg.Detect.ModelPath, bundledModel)
+				cfg.Detect.ModelPath = bundledModel
+			}
+		}
 		od, odErr := detect.NewObjectDetector(cfg.Detect.ModelPath, cfg.Detect.MinObjectScore)
 		if odErr != nil {
 			log.Printf("object detector: %v", odErr)
