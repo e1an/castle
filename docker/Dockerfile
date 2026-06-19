@@ -28,7 +28,7 @@ RUN ldconfig
 
 COPY go.mod go.sum ./
 RUN --mount=type=cache,target=/go/pkg/mod \
-    go mod download
+    go mod tidy
 COPY . .
 COPY --from=ui-builder /src/web/dist/ internal/api/ui/
 
