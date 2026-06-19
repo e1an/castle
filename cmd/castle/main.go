@@ -424,24 +424,21 @@ func main() {
 		Handler: apiSrv,
 	}
 
+	// TLS is always on. Cert lives in the config volume so it persists across
+	// container restarts. Auto-generate a self-signed cert on first startup.
+	certFile := filepath.Join(filepath.Dir(*cfgPath), "tls.crt")
+	keyFile := filepath.Join(filepath.Dir(*cfgPath), "tls.key")
+	if _, err := os.Stat(certFile); os.IsNotExist(err) {
+		if err := generateSelfSignedCert(certFile, keyFile); err != nil {
+			log.Fatalf("tls: generate cert: %v", err)
+		}
+		log.Printf("generated self-signed TLS cert → %s", certFile)
+	}
+
 	go func() {
-		cert, key := cfg.Server.TLSCert, cfg.Server.TLSKey
-		if cert != "" && key != "" {
-			if _, err := os.Stat(cert); os.IsNotExist(err) {
-				if err := generateSelfSignedCert(cert, key); err != nil {
-					log.Fatalf("tls: generate cert: %v", err)
-				}
-				log.Printf("generated self-signed TLS cert → %s", cert)
-			}
-			log.Printf("API listening on https://%s (TLS)", srv.Addr)
-			if err := srv.ListenAndServeTLS(cert, key); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("https: %v", err)
-			}
-		} else {
-			log.Printf("API listening on http://%s", srv.Addr)
-			if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Fatalf("http: %v", err)
-			}
+		log.Printf("API listening on https://%s", srv.Addr)
+		if err := srv.ListenAndServeTLS(certFile, keyFile); err != nil && err != http.ErrServerClosed {
+			log.Fatalf("https: %v", err)
 		}
 	}()
 

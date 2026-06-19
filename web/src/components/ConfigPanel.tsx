@@ -370,16 +370,7 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
             <input type="number" value={cfg.server.port}
               onChange={(e) => set("server", { port: Number(e.target.value) })} />
           </label>
-          <label>
-            TLS certificate path <span className="field-note">(enables HTTPS — auto-generated if absent)</span>
-            <input placeholder="/config/tls.crt" value={cfg.server.tls_cert ?? ""}
-              onChange={(e) => set("server", { tls_cert: e.target.value })} />
-          </label>
-          <label>
-            TLS key path
-            <input placeholder="/config/tls.key" value={cfg.server.tls_key ?? ""}
-              onChange={(e) => set("server", { tls_key: e.target.value })} />
-          </label>
+
         </div>
       </section>
     </div>

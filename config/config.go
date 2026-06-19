@@ -15,10 +15,8 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Host    string `yaml:"host"     json:"host"`
-	Port    int    `yaml:"port"     json:"port"`
-	TLSCert string `yaml:"tls_cert" json:"tls_cert"`
-	TLSKey  string `yaml:"tls_key"  json:"tls_key"`
+	Host string `yaml:"host" json:"host"`
+	Port int    `yaml:"port" json:"port"`
 }
 
 // LabelConfig holds per-label detection filtering thresholds for a camera.
