@@ -8,11 +8,24 @@ export interface Event {
   OccurredAt: string; // ISO 8601
 }
 
+export interface LabelConfig {
+  min_score?: number;
+  min_area?: number;
+}
+
+export interface CameraDetect {
+  motion_threshold?: number | null;
+  enable_object_detect?: boolean | null;
+  min_object_score?: number | null;
+  labels?: Record<string, LabelConfig> | null;
+}
+
 export interface Camera {
   id: string;
   name: string;
   url: string;
   enable: boolean;
+  detect?: CameraDetect | null;
 }
 
 export interface ServerConfig {

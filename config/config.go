@@ -19,11 +19,27 @@ type ServerConfig struct {
 	Port int    `yaml:"port" json:"port"`
 }
 
+// LabelConfig holds per-label detection filtering thresholds for a camera.
+type LabelConfig struct {
+	MinScore float64 `yaml:"min_score,omitempty" json:"min_score,omitempty"`
+	MinArea  int     `yaml:"min_area,omitempty"  json:"min_area,omitempty"`
+}
+
+// CameraDetect holds per-camera detection overrides.
+// Nil pointer fields fall back to the global DetectConfig value.
+type CameraDetect struct {
+	MotionThreshold    *float64               `yaml:"motion_threshold,omitempty"     json:"motion_threshold,omitempty"`
+	EnableObjectDetect *bool                  `yaml:"enable_object_detect,omitempty" json:"enable_object_detect,omitempty"`
+	MinObjectScore     *float64               `yaml:"min_object_score,omitempty"     json:"min_object_score,omitempty"`
+	Labels             map[string]LabelConfig `yaml:"labels,omitempty"               json:"labels,omitempty"`
+}
+
 type Camera struct {
-	ID     string `yaml:"id"     json:"id"`
-	Name   string `yaml:"name"   json:"name"`
-	URL    string `yaml:"url"    json:"url"`
-	Enable bool   `yaml:"enable" json:"enable"`
+	ID     string        `yaml:"id"               json:"id"`
+	Name   string        `yaml:"name"             json:"name"`
+	URL    string        `yaml:"url"              json:"url"`
+	Enable bool          `yaml:"enable"           json:"enable"`
+	Detect *CameraDetect `yaml:"detect,omitempty" json:"detect,omitempty"`
 }
 
 type RecordConfig struct {

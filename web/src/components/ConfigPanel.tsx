@@ -1,11 +1,17 @@
 import { useEffect, useState } from "react";
 import { fetchConfig, saveConfig } from "../api";
 import { maskUrl, parseUrl, buildUrl } from "../utils/url";
-import type { Config } from "../types";
+import type { CameraDetect, Config } from "../types";
 
 interface Props {
   onAddCamera: () => void;
   onSaved?: () => void;
+}
+
+interface LabelEntry {
+  label: string;
+  minScore: string;
+  minArea: string;
 }
 
 interface CamEdit {
@@ -13,6 +19,10 @@ interface CamEdit {
   baseUrl: string;
   username: string;
   password: string;
+  detectMotionThreshold: string;
+  detectEnableOD: "" | "true" | "false";
+  detectMinScore: string;
+  labels: LabelEntry[];
 }
 
 export function ConfigPanel({ onAddCamera, onSaved }: Props) {
@@ -20,7 +30,10 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<{ ok: boolean; msg: string } | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [edit, setEdit] = useState<CamEdit>({ name: "", baseUrl: "", username: "", password: "" });
+  const [edit, setEdit] = useState<CamEdit>({
+    name: "", baseUrl: "", username: "", password: "",
+    detectMotionThreshold: "", detectEnableOD: "", detectMinScore: "", labels: [],
+  });
 
   useEffect(() => {
     fetchConfig().then(setCfg).catch((e) => setStatus({ ok: false, msg: String(e) }));
@@ -65,19 +78,51 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
     const cam = cfg?.cameras.find((c) => c.id === id);
     if (!cam) return;
     const { baseUrl, username, password } = parseUrl(cam.url);
-    setEdit({ name: cam.name, baseUrl, username, password });
+    const d = cam.detect;
+    setEdit({
+      name: cam.name, baseUrl, username, password,
+      detectMotionThreshold: d?.motion_threshold != null ? String(d.motion_threshold) : "",
+      detectEnableOD: d?.enable_object_detect != null ? (d.enable_object_detect ? "true" : "false") : "",
+      detectMinScore: d?.min_object_score != null ? String(d.min_object_score) : "",
+      labels: d?.labels
+        ? Object.entries(d.labels).map(([label, lc]) => ({
+            label,
+            minScore: lc.min_score ? String(lc.min_score) : "",
+            minArea: lc.min_area ? String(lc.min_area) : "",
+          }))
+        : [],
+    });
     setEditingId(id);
   }
 
   function commitEdit(id: string) {
     const url = buildUrl(edit.baseUrl, edit.username, edit.password);
+    const detect = buildDetect(edit);
     setCfg((prev) => prev != null ? {
       ...prev,
       cameras: prev.cameras.map((c) =>
-        c.id === id ? { ...c, name: edit.name, url } : c
+        c.id === id ? { ...c, name: edit.name, url, detect } : c
       ),
     } : prev);
     setEditingId(null);
+  }
+
+  function buildDetect(e: CamEdit): CameraDetect | undefined {
+    const d: CameraDetect = {};
+    if (e.detectMotionThreshold !== "") d.motion_threshold = Number(e.detectMotionThreshold);
+    if (e.detectEnableOD !== "") d.enable_object_detect = e.detectEnableOD === "true";
+    if (e.detectMinScore !== "") d.min_object_score = Number(e.detectMinScore);
+    const validLabels = e.labels.filter((l) => l.label.trim() !== "");
+    if (validLabels.length > 0) {
+      d.labels = {};
+      for (const { label, minScore, minArea } of validLabels) {
+        d.labels[label.trim()] = {
+          min_score: minScore !== "" ? Number(minScore) : undefined,
+          min_area: minArea !== "" ? Number(minArea) : undefined,
+        };
+      }
+    }
+    return Object.keys(d).length > 0 ? d : undefined;
   }
 
   return (
@@ -128,6 +173,71 @@ export function ConfigPanel({ onAddCamera, onSaved }: Props) {
                       Password
                       <input type="password" value={edit.password} onChange={(e) => setEdit((p) => ({ ...p, password: e.target.value }))} />
                     </label>
+                    <label>
+                      Motion threshold <span className="field-note">(blank = global)</span>
+                      <input type="number" step={0.001} min={0} max={1}
+                        value={edit.detectMotionThreshold} placeholder="global"
+                        onChange={(e) => setEdit((p) => ({ ...p, detectMotionThreshold: e.target.value }))} />
+                    </label>
+                    <label>
+                      Object detect
+                      <select value={edit.detectEnableOD}
+                        onChange={(e) => setEdit((p) => ({ ...p, detectEnableOD: e.target.value as "" | "true" | "false" }))}>
+                        <option value="">Use global</option>
+                        <option value="true">Enabled</option>
+                        <option value="false">Disabled</option>
+                      </select>
+                    </label>
+                    <label>
+                      Min object score <span className="field-note">(blank = global)</span>
+                      <input type="number" step={0.05} min={0} max={1}
+                        value={edit.detectMinScore} placeholder="global"
+                        onChange={(e) => setEdit((p) => ({ ...p, detectMinScore: e.target.value }))} />
+                    </label>
+                    <div className="config-grid--full">
+                      <div className="label-list__header">
+                        <span className="field-note">Label allow-list — empty means allow all labels</span>
+                        <button className="btn btn--secondary btn--sm" type="button"
+                          onClick={() => setEdit((p) => ({ ...p, labels: [...p.labels, { label: "", minScore: "", minArea: "" }] }))}>
+                          + Add label
+                        </button>
+                      </div>
+                      {edit.labels.length > 0 && (
+                        <div className="label-list">
+                          <div className="label-list__row label-list__row--head">
+                            <span>Label</span><span>Min score</span><span>Min area (px²)</span><span />
+                          </div>
+                          {edit.labels.map((entry, i) => (
+                            <div key={i} className="label-list__row">
+                              <input placeholder="person" value={entry.label}
+                                onChange={(e) => setEdit((p) => {
+                                  const labels = [...p.labels];
+                                  labels[i] = { ...labels[i], label: e.target.value };
+                                  return { ...p, labels };
+                                })} />
+                              <input type="number" step={0.05} min={0} max={1} placeholder="0.50"
+                                value={entry.minScore}
+                                onChange={(e) => setEdit((p) => {
+                                  const labels = [...p.labels];
+                                  labels[i] = { ...labels[i], minScore: e.target.value };
+                                  return { ...p, labels };
+                                })} />
+                              <input type="number" min={0} placeholder="none"
+                                value={entry.minArea}
+                                onChange={(e) => setEdit((p) => {
+                                  const labels = [...p.labels];
+                                  labels[i] = { ...labels[i], minArea: e.target.value };
+                                  return { ...p, labels };
+                                })} />
+                              <button className="btn btn--ghost btn--sm" type="button"
+                                onClick={() => setEdit((p) => ({ ...p, labels: p.labels.filter((_, j) => j !== i) }))}>
+                                ×
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
                   </div>
                   <div className="camera-edit__actions">
                     <button className="btn btn--primary btn--sm" onClick={() => commitEdit(cam.id)}>Done</button>

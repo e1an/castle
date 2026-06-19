@@ -74,18 +74,18 @@ func main() {
 		}
 	}
 
-	// runDetect serialises ONNX inference and returns the best detection or "","0".
-	runDetect := func(frame image.Image) (label string, score float64) {
+	// runDetect serialises ONNX inference and returns all detections above the global threshold.
+	runDetect := func(frame image.Image) []detect.Detection {
 		if objDetector == nil {
-			return "", 0
+			return nil
 		}
 		detMu.Lock()
 		defer detMu.Unlock()
 		dets, err := objDetector.Detect(frame)
-		if err != nil || len(dets) == 0 {
-			return "", 0
+		if err != nil {
+			return nil
 		}
-		return dets[0].Label, dets[0].Score
+		return dets
 	}
 
 	var cfgMu sync.RWMutex
@@ -108,15 +108,25 @@ func main() {
 			if !cam.Enable {
 				continue
 			}
-			detectors[cam.ID] = detect.NewMotionDetector(c.Detect.MotionThreshold)
 			camState[cam.ID] = &perCam{}
 			cam := cam
 
-			onMotion := func(camID string, frame image.Image) {
-				cfgMu.RLock()
-				_ = c.Detect.MotionThreshold // read under lock if needed in future
-				cfgMu.RUnlock()
+			// Effective per-camera detect settings (global defaults + per-camera overrides).
+			motionThreshold := c.Detect.MotionThreshold
+			enableOD := c.Detect.EnableObjectDetect && objDetector != nil
+			var camDetect config.CameraDetect
+			if cam.Detect != nil {
+				camDetect = *cam.Detect
+				if camDetect.MotionThreshold != nil {
+					motionThreshold = *camDetect.MotionThreshold
+				}
+				if camDetect.EnableObjectDetect != nil {
+					enableOD = *camDetect.EnableObjectDetect && objDetector != nil
+				}
+			}
+			detectors[cam.ID] = detect.NewMotionDetector(motionThreshold)
 
+			onMotion := func(camID string, frame image.Image) {
 				if !detectors[camID].Detect(frame) {
 					return
 				}
@@ -129,14 +139,17 @@ func main() {
 					// so we pick the best label across the whole event, not just
 					// the (often blurry) trigger frame.
 					pc.mu.Unlock()
-					label, score := runDetect(frame)
-					if label != "" {
-						pc.mu.Lock()
-						if score > pc.detScore {
-							pc.detLabel = label
-							pc.detScore = score
+					if enableOD {
+						dets := runDetect(frame)
+						label, score := pickBestDetection(dets, camDetect)
+						if label != "" {
+							pc.mu.Lock()
+							if score > pc.detScore {
+								pc.detLabel = label
+								pc.detScore = score
+							}
+							pc.mu.Unlock()
 						}
-						pc.mu.Unlock()
 					}
 					return
 				}
@@ -161,14 +174,17 @@ func main() {
 					detDone := make(chan struct{})
 					go func() {
 						defer close(detDone)
-						label, score := runDetect(frame)
-						if label != "" {
-							pc.mu.Lock()
-							if score > pc.detScore {
-								pc.detLabel = label
-								pc.detScore = score
+						if enableOD {
+							dets := runDetect(frame)
+							label, score := pickBestDetection(dets, camDetect)
+							if label != "" {
+								pc.mu.Lock()
+								if score > pc.detScore {
+									pc.detLabel = label
+									pc.detScore = score
+								}
+								pc.mu.Unlock()
 							}
-							pc.mu.Unlock()
 						}
 					}()
 
@@ -300,4 +316,33 @@ func loadConfig(path string) (*config.Config, error) {
 		return nil, err
 	}
 	return cfg, nil
+}
+
+// pickBestDetection filters detections by the camera's label allow-list and
+// per-label thresholds, then returns the highest-scoring allowed detection.
+func pickBestDetection(dets []detect.Detection, camDetect config.CameraDetect) (string, float64) {
+	var bestLabel string
+	var bestScore float64
+	for _, d := range dets {
+		if len(camDetect.Labels) > 0 {
+			lc, ok := camDetect.Labels[d.Label]
+			if !ok {
+				continue // not in allow-list
+			}
+			if lc.MinScore > 0 && d.Score < lc.MinScore {
+				continue
+			}
+			if lc.MinArea > 0 && d.Box.Dx()*d.Box.Dy() < lc.MinArea {
+				continue
+			}
+		}
+		if camDetect.MinObjectScore != nil && d.Score < *camDetect.MinObjectScore {
+			continue
+		}
+		if d.Score > bestScore {
+			bestScore = d.Score
+			bestLabel = d.Label
+		}
+	}
+	return bestLabel, bestScore
 }

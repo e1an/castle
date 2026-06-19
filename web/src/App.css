@@ -330,8 +330,35 @@ body {
   width: 100%;
 }
 .config-grid label input:focus { outline: none; border-color: var(--accent); }
+.config-grid label select {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 6px 8px;
+  font-size: 13px;
+  width: 100%;
+}
+.config-grid label select:focus { outline: none; border-color: var(--accent); }
 .config-grid__checkbox { flex-direction: row !important; align-items: center; gap: 8px !important; font-size: 13px !important; color: var(--text) !important; }
 .config-grid--full { grid-column: 1 / -1; }
+
+/* ── label allow-list editor ─────────────────────────────────────────────── */
+.label-list__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 6px; }
+.label-list { display: flex; flex-direction: column; gap: 4px; }
+.label-list__row { display: grid; grid-template-columns: 2fr 1fr 1fr auto; gap: 6px; align-items: center; }
+.label-list__row--head { font-size: 11px; color: var(--text-dim); padding: 0 2px; }
+.label-list__row input {
+  background: var(--bg);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 5px 7px;
+  font-size: 12px;
+  width: 100%;
+  box-sizing: border-box;
+}
+.label-list__row input:focus { outline: none; border-color: var(--accent); }
 
 /* ── camera list in config ────────────────────────────────────────────────── */
 .camera-list { display: flex; flex-direction: column; gap: 8px; }
